@@ -1,0 +1,125 @@
+apimServiceName: "{#apimServiceName#}"
+
+namedValues:
+  - name: PAYPALURL
+    properties:
+      displayName: "PAYPALURL"
+      secret: false
+      value: "https://api.{#PAYPALENV#}.paypal.com"
+  - name: 65dc5a355ddd1714e84b3e48
+    properties:
+      displayName: "{#LOGGER_CREDENTIALS#}"
+      secret: true
+  - name: mysecretvalue
+    properties:
+      displayName: mysecretvalue
+      keyVault:
+        identityClientId: "{#identityClientId#}"
+        secretIdentifier: "{#secretIdentifierUrl#}"
+  - name: testSecret
+    properties:
+      displayName: testSecret
+      value: "{#testSecretValue#}"
+
+loggers:
+  - name: "{#sourceAppInsightsName#}"
+    properties:
+      loggerType: applicationInsights
+      description: {#environment#} application insights
+      resourceId: "/subscriptions/{#AZURE_SUBSCRIPTION_ID#}/resourceGroups/{#AZURE_RESOURCE_GROUP_NAME#}/providers/microsoft.insights/components/{#AZURE_APIM_LOGGER#}"
+      credentials:
+        instrumentationKey: "{{ {#APP_INSIGHTS_KEY#} }}"
+      isBuffered: true
+
+diagnostics:
+  - name: applicationinsights
+    properties:
+      verbosity: Error
+      loggerId: "/subscriptions/{#AZURE_SUBSCRIPTION_ID#}/resourceGroups/{#AZURE_RESOURCE_GROUP_NAME#}/providers/Microsoft.ApiManagement/service/{#API_MANAGEMENT_SERVICE_NAME#}/loggers/{#AZURE_APIM_LOGGER#}"
+
+backends:
+  - name: BAZAARVOICE-ENDPOINT
+    properties:
+      url: "{#BAZAARVOICE_ENDPOINT_URL#}"
+      resourceid: "https://management.azure.com/subscriptions/{#AZURE_SUBSCRIPTION_ID#}/resourceGroups/{#AZURE_RESOURCE_GROUP_NAME#}/providers/Microsoft.Web/sites/{#funcAppName#}"
+      credentials:
+        header: {}
+        query: {}
+      protocol: "http"
+      tls: 
+        validateCertificateChain: false
+        validateCertificateName: false
+  - name: AthenaEndpoint
+    properties:
+      url: "{#ATHENAENDPOINT_URL#}"
+      resourceid: "https://management.azure.com/subscriptions/{#AZURE_SUBSCRIPTION_ID#}/resourceGroups/{#AZURE_RESOURCE_GROUP_NAME#}/providers/Microsoft.Web/sites/{#funcAppName#}"
+      credentials:
+        header: {}
+        query: {}
+      protocol: "http"
+      tls: 
+        validateCertificateChain: false
+        validateCertificateName: false
+## Additional Examples
+#  - name: LogicApp_helloworldfromlogicapp_rg-apim-lab_77fadbdc74f14ce88962b34400a1f170
+#    properties:
+#      url: "https://prod-75.eastus.logic.azure.com/workflows/{#logicAppGuid#}/triggers"
+#      resourceid: "https://management.azure.com/subscriptions/{#AZURE_SUBSCRIPTION_ID#}/resourceGroups/{#AZURE_RESOURCE_GROUP_NAME#}/providers/Microsoft.Logic/workflows/{#logicAppName#}"
+#  - name: AnotherBackendService
+#    properties:
+#      url: "{#anotherBackendServiceUrl#}"
+#      resourceid: "https://management.azure.com/subscriptions/{#AZURE_SUBSCRIPTION_ID#}/resourceGroups/{#AZURE_RESOURCE_GROUP_NAME#}/providers/Microsoft.Web/sites/{#anotherBackendServiceName#}"
+#      credentials:
+#        query:
+#          "API_KEY": [
+#            "{#anotherBackendServiceApiKey#}"
+#          ]
+
+tags:
+  - name: Dev
+    displayName: Development
+  - name: QA
+    displayName: Quality Assurance
+  - name: Prod
+    displayName: Production
+
+#versionSets:
+#  - name: apiVersionSet1
+#    properties:
+#      displayName: API Version Set 1
+#      versioningScheme: Segment
+#  - name: apiVersionSet2
+#    properties:
+#      displayName: API Version Set 2
+#      versioningScheme: Header
+#      versionHeaderName: api-version
+
+policyFragments:
+  - name: policyFragment1
+    properties:
+      description: Example policy fragment 1
+      value: "<inbound><base /><set-header name='X-Example' exists-action='override'><value>ExampleValue</value></set-header></inbound>"
+  - name: policyFragment2
+    properties:
+      description: Example policy fragment 2
+      value: "<outbound><base /><set-body><value>{'message': 'Hello World'}</value></set-body></outbound>"
+
+subscriptions:
+  - name: subscription1
+    properties:
+      displayName: Subscription 1
+      state: active
+      ownerId: "/subscriptions/{#AZURE_SUBSCRIPTION_ID#}/resourceGroups/{#AZURE_RESOURCE_GROUP_NAME#}/providers/Microsoft.ApiManagement/service/{#apimServiceName#}/users/{#userId1#}"
+  - name: subscription2
+    properties:
+      displayName: Subscription 2
+      state: active
+      ownerId: "/subscriptions/{#AZURE_SUBSCRIPTION_ID#}/resourceGroups/{#AZURE_RESOURCE_GROUP_NAME#}/providers/Microsoft.ApiManagement/service/{#apimServiceName#}/users/{#userId2#}"
+
+#apis:
+#  - name: portal-b2c-integration
+#    diagnostics:
+#      - name: applicationinsights
+#        properties:
+#          verbosity: Error
+#          loggerId: "/subscriptions/{#AZURE_SUBSCRIPTION_ID#}/resourceGroups/{#AZURE_RESOURCE_GROUP_NAME#}/providers/Microsoft.ApiManagement/service/{#apimServiceName#}/loggers/{#destinationAppInsightsName#}"

@@ -1,0 +1,277 @@
+name: Enhanced APIM - Extract APIs and Artifacts
+run-name: Enhanced ${{ inputs.environment }} APIM Extractor
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Environment to extract from (e.g., dev.1, qa.3, uat.2)'
+        required: true
+        type: string
+        default: 'dev.1'
+      IS_BACKUP:
+        description: 'Whether the extraction is a backup or not'
+        required: false
+        type: boolean
+        default: false
+      API_SPECIFICATION_FORMAT:
+        description: 'API Specification Format'
+        required: true
+        type: string
+        default: 'OpenAPIV3Yaml'
+
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to extract from (e.g., dev.1, qa.3, uat.2)'
+        required: true
+        type: environment
+      IS_BACKUP:
+        description: 'Whether the extraction is a backup or not'
+        required: false
+        type: boolean
+        default: false
+      API_SPECIFICATION_FORMAT:
+        description: 'API Specification Format'
+        required: true
+        type: choice
+        options:
+          - OpenAPIV3Yaml
+
+permissions:
+  id-token: write
+  contents: write
+  actions: write
+  pull-requests: write
+
+env:
+  apiops_release_version: v4.1.2
+  RUNNER_DEBUG: 1
+
+jobs:
+  APIM-extract-apis:
+    runs-on: [self-hosted]
+    name: "${{ inputs.environment }} APIM Extraction"
+    environment: ${{ inputs.environment }}
+    env:
+      AZURE_CLIENT_ID: "${{ secrets.AZURE_CLIENT_ID }}"
+      AZURE_CLIENT_SECRET: "${{ secrets.AZURE_CLIENT_SECRET }}"
+      AZURE_TENANT_ID: "${{ secrets.AZURE_TENANT_ID }}"
+      AZURE_SUBSCRIPTION_ID: "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+      AZURE_RESOURCE_GROUP_NAME: "${{ vars.AZURE_RESOURCE_GROUP_NAME }}"
+      API_MANAGEMENT_SERVICE_NAME: "${{ vars.API_MANAGEMENT_SERVICE_NAME }}"
+      API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH: "${{ GITHUB.WORKSPACE }}/src/APIM"
+      API_SPECIFICATION_FORMAT: "${{ inputs.API_SPECIFICATION_FORMAT }}"
+
+    steps:
+      - name: Setup PowerShell
+        run: |
+          if ! command -v pwsh &> /dev/null
+          then
+            sudo apt-get update
+            sudo apt-get install -y wget apt-transport-https software-properties-common
+            source /etc/os-release
+            wget -q https://packages.microsoft.com/config/ubuntu/$VERSION_ID/packages-microsoft-prod.deb
+            sudo dpkg -i packages-microsoft-prod.deb
+            rm packages-microsoft-prod.deb
+            sudo apt-get update
+            sudo apt-get install -y powershell
+          else
+            echo "PowerShell is already installed, skipping installation."
+          fi
+        continue-on-error: true
+        shell: bash
+
+      - name: Install Azure PowerShell module
+        run: |
+          pwsh -Command "Install-Module -Name Az -AllowClobber -Scope CurrentUser -Force"      
+      # Determine the branch name for the pull request
+      - name: Set branch name for pull request
+        id: set_branch_name
+        run: |
+          echo "Determining Branch name for PR ..."
+          if [ "${{ inputs.IS_BACKUP }}" = "true" ]; then
+            branch_name="backup/${{ inputs.environment }}__$(date +%Y%m%d%H)"
+          else
+            branch_name="extractor/${{ inputs.environment }}"
+          fi
+          echo "BRANCH_NAME=${branch_name}" >> $GITHUB_ENV
+
+      # Logging environment variables for debugging
+      - name: Write-Host variables
+        run: |
+          Write-Host "Environment: ${{ inputs.environment }}"
+          Write-Host "Branch Name: ${{ env.BRANCH_NAME }}"
+          Write-Host "API_SPECIFICATION_FORMAT: ${{ env.API_SPECIFICATION_FORMAT }}"
+          Write-Host "API_MANAGEMENT_SERVICE_NAME: ${{ env.API_MANAGEMENT_SERVICE_NAME }}"
+          Write-Host "AZURE_RESOURCE_GROUP_NAME: ${{ env.AZURE_RESOURCE_GROUP_NAME }}"
+          Write-Host "API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH: ${{ env.API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH }}"
+        shell: pwsh
+
+      # Checkout or create a branch named according to the environment or backup
+      - name: Checkout for ${{ env.BRANCH_NAME }}
+        uses: actions/checkout@v4
+#        with:
+#          ref: do-not-use #  ${{ env.BRANCH_NAME }}
+#          fetch-depth: 0 # Remove depth limit to avoid shallow clone issues
+#          persist-credentials: true # Ensure the action uses the GitHub token to authenticate. Note: Setting `persist-credentials` to false means that any further Git operations will require manual authentication or a separate authentication mechanism, as credentials are not retained by default.
+
+      # Create branch if it doesn't exist (in case of backup or new environment)
+ #     - name: Create branch if not exists
+ #       run: |
+ #         git fetch origin || true
+ #         if git show-ref --verify --quiet refs/heads/${{ env.BRANCH_NAME }}; then
+ #           git checkout ${{ env.BRANCH_NAME }}
+ #         else
+ #           git checkout -b ${{ env.BRANCH_NAME }}
+ #           git pull
+ #         fi
+ #       shell: bash
+
+      # Clear any previous contents in the output folder
+      - name: Clear APIM folder contents
+        run: rm -rf ${{ GITHUB.WORKSPACE }}/src/APIM/*
+
+      # Run the extractor to extract APIs from the given environment with retry logic
+      - name: Run extractor for ${{ inputs.environment }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          $VerbosePreference = "Continue"
+          $InformationPreference = "Continue"
+          
+          Write-Information "Downloading extractor..."
+          $extractorFileName = if ($env:RUNNER_OS -like "*Windows*") { "extractor.win-x64.exe" } else { "extractor.linux-x64.exe" }
+          $uri = "https://github.com/Azure/apiops/releases/download/${{ env.apiops_release_version }}/$extractorFileName"
+          $destinationFilePath = Join-Path "${{ runner.temp }}" "extractor.exe"
+          
+          $maxDownloadRetries = 3
+          $downloadRetryCount = 0
+          do {
+            try {
+              Invoke-WebRequest -Uri "$uri" -OutFile "$destinationFilePath" -ErrorAction Stop
+              Write-Information "Extractor downloaded successfully."
+              break
+            } catch {
+              Write-Warning "Download attempt $($downloadRetryCount + 1) failed. Retrying..."
+              Start-Sleep -Seconds 5
+              $downloadRetryCount++
+            }
+          } while ($downloadRetryCount -lt $maxDownloadRetries)
+          
+          if ($downloadRetryCount -eq $maxDownloadRetries) {
+            throw "Failed to download extractor after $maxDownloadRetries attempts."
+          }
+          
+          if ($env:RUNNER_OS -like "*Linux*") {
+            Write-Information "Setting file permissions..."
+            & chmod +x "$destinationFilePath"
+            if ($LASTEXITCODE -ne 0) { throw "Setting file permissions failed." }
+            Write-Information "Setting file permissions complete..."
+          }
+
+          # Running extractor to extract APIs with retry logic
+          $maxRetries = 3
+          $retryCount = 0
+          do {
+            try {
+              & "$destinationFilePath" --format "${{ env.API_SPECIFICATION_FORMAT }}" --output-folder "${{ env.API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH }}" --service-name "${{ env.API_MANAGEMENT_SERVICE_NAME }}" --resource-group "${{ env.AZURE_RESOURCE_GROUP_NAME }}" --subscription-id "${{ env.AZURE_SUBSCRIPTION_ID }}"
+              if ($LASTEXITCODE -eq 0) {
+                Write-Information "Execution complete."
+                break
+              } else {
+                throw "Running extractor failed."
+              }
+            } catch {
+              Write-Warning "Attempt $($retryCount + 1) failed. Retrying..."
+              Start-Sleep -Seconds 5
+              $retryCount++
+            }
+          } while ($retryCount -lt $maxRetries)
+
+          if ($retryCount -eq $maxRetries) {
+            throw "Extractor failed after $maxRetries attempts."
+          }
+        shell: pwsh
+
+      # Publish extracted artifacts for further processing
+      - name: Publish ${{ inputs.environment }} artifacts for further Processing
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-from-portal
+          path: "${{ GITHUB.WORKSPACE }}/${{ env.API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH }}"
+      # Create branch if it doesn't exist (in case of backup or new environment)
+#      - name: Create branch if not exists
+#        run: |
+#          git fetch origin || true
+      # Create a pull request for the artifacts
+      - name: Create artifacts pull request
+#        if: "${{ env.BRANCH_NAME == ' ' }}"
+        uses: Tractor-Supply-Integration/create-pull-request@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "Extracted APIs from APIM instance ${{ env.API_MANAGEMENT_SERVICE_NAME }} for environment ${{ inputs.environment }}"
+          branch: "${{ env.BRANCH_NAME }}"
+          title: "APIM Extraction for environment ${{ inputs.environment }} - Successful"
+          body: >
+            This PR is auto-generated by GitHub Actions workflow for environment ${{ inputs.environment }}.
+            Extraction Type: ${{ inputs.IS_BACKUP && 'Backup' || 'Regular' }}
+          labels: extract, automated pr, ${{ inputs.IS_BACKUP && 'backup' || 'regular' }}
+      - name: Deployed
+        run: echo "Completed Extraction for ${{ inputs.environment }}-APIM"
+      # Tag Successful Extraction
+#      - name: Tag Successful Extraction
+#        if: success()
+#        run: |
+#          git config --global user.name "github-actions"
+#          git config --global user.email "github-actions@github.com"
+#
+#          # Define base tag name and current date
+#          base_tag="${{ inputs.environment }}-extraction-successful"
+#          current_date=$(date +%Y%m%d)  # Date format: YYYYMMDD
+#          new_tag="${base_tag}-${current_date}"
+#          
+#          # Check if the old tag (without date) exists on the remote
+#          old_tag="${{ inputs.environment }}-extraction-successful"
+#
+#          if git ls-remote --tags origin | grep -q "refs/tags/$old_tag"; then
+#            echo "Old tag $old_tag exists. Deleting it from remote..."
+#            git push --delete origin "$old_tag" || echo "Failed to delete old tag. It might not exist locally."
+#          else
+#            echo "Old tag $old_tag DOES NOT exists."
+#          fi
+#
+#          # Fetch all tags from remote
+#          git fetch --tags
+#
+#          # List all matching tags and delete those older than 7 days
+#          echo "Checking for tags older than 7 days..."
+#          for tag in $(git tag -l "${base_tag}-*"); do
+#            # Extract the date from the tag (assumes YYYYMMDD format at the end of the tag)
+#            tag_date=$(echo $tag | grep -oP '\d{8}$')
+
+#            # Calculate tag age in days
+#            if [ ! -z "$tag_date" ]; then
+#              tag_timestamp=$(date -d "$tag_date" +%s)
+#              current_timestamp=$(date +%s)
+#              age_days=$(( (current_timestamp - tag_timestamp) / 86400 ))
+#
+#              # Delete tags older than 7 days
+#              if [ $age_days -gt 7 ]; then
+#                echo "Deleting old tag: $tag (age: ${age_days} days)"
+#                git push --delete origin "$tag" || echo "Failed to delete tag $tag on remote."
+#                git tag -d "$tag" || echo "Failed to delete local tag $tag."
+#              fi
+#            fi
+#          done
+#
+#          # Delete the old base tag (without date) if it exists
+#          if git ls-remote --tags origin | grep -q "refs/tags/$base_tag"; then
+#            echo "Deleting old base tag: $base_tag"
+#            git push --delete origin "$base_tag" || echo "Failed to delete base tag on remote."
+#          fi
+#
+#          # Create and push the new tag
+#          echo "Creating new tag: $new_tag"
+#          git tag -a "$new_tag" -m "Successful extraction for ${{ inputs.environment }} on $current_date"
+#          git push origin "$new_tag"
+#        shell: bash

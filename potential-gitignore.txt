@@ -1,0 +1,88 @@
+# Ignore API Management extraction folders and files that contain environment-specific or sensitive data.
+
+# Ignore backend configurations - contains potentially sensitive URLs and keys
+#*/backends/
+#*/backends/**
+
+# Ignore named values - may contain secrets or environment-specific variables
+#*/namedValues/
+#*/namedValues/**
+
+# Ignore API versions configuration
+*/apiVersions/
+*/apiVersions/**
+
+# Ignore certificates - contains security-sensitive certificate information
+*/certificates/
+*/certificates/**
+
+# Ignore diagnostic settings
+*/diagnostics/
+*/diagnostics/**
+
+# Ignore Identity Provider configuration
+*/identityProviders/
+*/identityProviders/**
+
+# Ignore Loggers - may contain sensitive logging destination info
+*/loggers/
+*/loggers/**
+
+# Ignore Linked Backend Services - usually contains environment-specific backend definitions
+*/backendServices/
+*/backendServices/**
+
+# Ignore policy fragments that might contain sensitive information
+*/policyFragments/
+*/policyFragments/**
+
+# Ignore tags - these are often just metadata that aren't required for codebase
+*/tags/
+*/tags/**
+
+# Ignore authorization providers
+*/authorizationProviders/
+*/authorizationProviders/**
+
+# Ignore gateway settings (often environment-specific)
+*/gateways/
+*/gateways/**
+*/gatewayApis/
+*/gatewayApis/**
+
+# Ignore subscriptions configuration
+*/subscriptions/
+*/subscriptions/**
+
+# Ignore .bak and temp files
+*.bak
+*.tmp
+*.temp
+
+# Ignore build artifacts
+dist/
+build/
+
+# Ignore Node dependencies if they exist in the project
+node_modules/
+
+# Ignore Python virtual environment folders if scripts use Python for automation
+venv/
+.env/
+
+# Ignore system files
+.DS_Store
+Thumbs.db
+
+# Ignore IDE/project-specific files
+.vscode/
+.idea/
+*.code-workspace
+
+# Ignore GitHub Actions workflow artifacts and secrets
+.github/workflows/secrets.yml
+.github/workflows/**/temp/
+
+# Ignore backup branches for extraction specifically
+backup/*
+

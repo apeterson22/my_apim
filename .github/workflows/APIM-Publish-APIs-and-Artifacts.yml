@@ -1,0 +1,344 @@
+name: APIM - Publish APIs and Artifacts
+run-name: ${{ inputs.environment }} APIM Publish
+
+on:
+  workflow_call:
+    # NOTE: workflow_call doesn't support choice inputs, have to constrain in calling workflow
+    inputs:
+      environment:
+        description: 'Environment to publish to'
+        required: true
+        type: string
+        default: 'dev'
+      environmentFrom: 
+        description: 'Environment to publish from'
+        required: false
+        type: string
+      instance:
+        description: 'Instance to publish to'
+        required: true
+        type: number
+      USE_CONFIG_FILE:
+        description: 'Whether or not to use a config file to override settings'
+        required: false
+        type: boolean
+        default: true
+      CONFIGURATION_YAML_PATH:
+        description: 'Choose your Team to Publish your Teams APIs'
+        required: true
+        type: string
+        default: "ExtractAllAPIs"
+      DEPLOY_COMMIT_ONLY:
+        description: 'Deploy only changes from commit'
+        required: false
+        type: boolean
+        default: false
+      DEPLOY_FROM_FEATURE:
+        description: 'Deploy from feature branch'
+        required: false
+        type: boolean
+        default: false
+      PUBLISHER_VERSION:
+        description: 'Version of the API Ops Publisher to use'
+        required: false
+        type: string
+        default: 'v4.1.2'
+
+  workflow_dispatch:
+    inputs:
+      environment: 
+        description: 'Environment to publish to'
+        required: true
+        type: environment
+      USE_CONFIG_FILE:
+        description: 'Prebuilt Config files used - Leave Default'
+        required: false
+        type: boolean
+        default: true
+#      environmentFrom: 
+#        description: 'Environment to publish from - Admin use only'
+#        required: false
+#        type: environment
+      Jira_number:
+        description: 'What is your Jira Number, just the Number. must have a branch feature/Jira_<jiranumber> if deploying to a Dev environment'
+        required: true
+        type: string
+      CONFIGURATION_YAML_PATH:
+        description: 'Choose your Team to Publish your Teams APIs - leave Default'
+        required: true
+        type: choice
+        default: "ExtractAllAPIs"
+        options:
+          - ExtractAllAPIs # Complete environment
+          - Developers     # Developer resources and components
+          - Operations     # Operational components
+## Removed as teams based deployments branching needs to be planned out better
+#          - Integration
+#          - WCS
+#          - CMA
+#          - POS
+#          - Petsense
+#          - BlueYonder
+#          - TMApp
+#          - CDP
+      DEPLOY_COMMIT_ONLY:
+        description: 'Deploy only changes from commit - Advanced users only,  Do not use'
+        required: false
+        type: boolean
+        default: false
+      DEPLOY_FROM_FEATURE:
+        description: 'Deploy from feature branch - Advanced users only, Do not use'
+        required: false
+        type: boolean
+        default: false
+#      FEATURE_BRANCH_NAME:
+#        description: 'Feature branch name to deploy from (if Deploy from Feature branch is checked)'
+#        required: false
+#        type: string
+#      PUBLISHER_VERSION:
+#        description: 'Version of the API Ops Publisher to use'
+#        required: false
+#        type: string
+#        default: 'v4.1.2'
+
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+
+env:
+  RUNNER_DEBUG: 1
+  APIM_KEY_VAULT: "${{ vars.APIM_KEY_VAULT }}"
+  AZURE_APP_INSIGHT_NAME: "${{ vars.AZURE_APP_INSIGHT_NAME }}"
+
+jobs:
+  APIM-Import-APIs:
+    runs-on: [self-hosted]
+    environment: ${{ inputs.environment }}
+    env:
+      AZURE_CLIENT_ID: "${{ secrets.AZURE_CLIENT_ID }}"
+      AZURE_CLIENT_SECRET: "${{ secrets.AZURE_CLIENT_SECRET }}"
+      AZURE_TENANT_ID: "${{ secrets.AZURE_TENANT_ID }}"
+      AZURE_SUBSCRIPTION_ID: "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+      AZURE_RESOURCE_GROUP_NAME: "${{ vars.AZURE_RESOURCE_GROUP_NAME }}"
+      API_MANAGEMENT_SERVICE_NAME: "${{ vars.API_MANAGEMENT_SERVICE_NAME }}"
+      API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH: "${{ github.workspace }}/src/APIM"
+      CONFIGURATION_YAML_PATH: ${{ github.workspace }}/configuration.${{inputs.environment}}.yaml
+      #CONFIGURATION_YAML_PATH: "${{ github.workspace }}/src/${{ github.event.inputs.CONFIGURATION_YAML_PATH }}.yaml"
+      BRANCH_NAME: "${{ inputs.environment }}"
+      PUBLISHER_VERSION: 'v4.1.2'
+      #PUBLISHER_VERSION: ${{ inputs.PUBLISHER_VERSION }}
+
+    steps:
+      - name: Setup PowerShell
+        run: |
+          sudo apt-get update && sudo apt-get install -y wget apt-transport-https software-properties-common
+          source /etc/os-release
+          wget -q https://packages.microsoft.com/config/ubuntu/$VERSION_ID/packages-microsoft-prod.deb
+          sudo dpkg -i packages-microsoft-prod.deb
+          rm packages-microsoft-prod.deb
+          sudo apt-get update && sudo apt-get install -y powershell
+        shell: bash
+
+      - name: Install Azure PowerShell module
+        run: |
+          $retryCount = 0
+          $maxRetries = 3
+          while ($retryCount -lt $maxRetries) {
+            pwsh -Command "Install-Module -Name Az -AllowClobber -Scope CurrentUser -Force"
+            if ($LASTEXITCODE -eq 0) {
+              break
+            }
+            Write-Host "Azure PowerShell module installation failed. Retrying... ($($retryCount + 1)/$maxRetries)"
+            $retryCount++
+            Start-Sleep -Seconds 5
+          }
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "Azure PowerShell module installation failed after $maxRetries attempts. Exiting."
+            exit 1
+          }
+        shell: pwsh
+      #############################################################################################
+      #NOTE: The extractor is looking for the existence of this environment variable to determine #
+      #      if it is going to extract a set of APIs as opposed to all the APIs.  If we are       #
+      #      going to extract all APIs, we simply don't create that environment variable.         #
+      #      This is where you add the absolute path to the configuration file.                   #
+      #############################################################################################
+      # Write environment variables for debugging purposes
+      - name: Log Environment Variables
+        run: |
+          Write-Host "Environment: ${{ inputs.environment }}"
+          Write-Host "CONFIGURATION_YAML_PATH: ${{ env.CONFIGURATION_YAML_PATH }}"
+          Write-Host "API_MANAGEMENT_SERVICE_NAME: ${{ env.API_MANAGEMENT_SERVICE_NAME }}"
+          Write-Host "AZURE_RESOURCE_GROUP_NAME: ${{ env.AZURE_RESOURCE_GROUP_NAME }}"
+          Write-Host "API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH: ${{ env.API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH }}"
+          Write-Host "COMMIT_ID: ${{ env.COMMIT_ID }}"
+        shell: pwsh
+
+      # Determine branch to use for deployment
+      - name: Set Branch Name
+        if: ${{ inputs.DEPLOY_FROM_FEATURE == true }}
+        run: |
+          echo "Using feature branch: feature/Jira_${{ inputs.Jira_number }}"
+          echo "BRANCH_NAME=feature/Jira_${{ inputs.Jira_number }}" >> $GITHUB_ENV
+        shell: bash
+
+      # Checkout the specific branch
+      - uses: actions/checkout@v4
+        name: Checking out Branch
+        with:
+          ref: ${{ env.BRANCH_NAME }}
+          fetch-depth: 0
+
+#      - name: Config PWD file
+#        run: |
+#          if ($env:USE_CONFIG_FILE -eq "true") {
+#            if (-not $env:CONFIGURATION_YAML_PATH) {
+#              Write-Host "CONFIGURATION_YAML_PATH is not provided, using default value."
+#              $env:CONFIGURATION_YAML_PATH = "$($github.workspace)/src/ExtractAllAPIs.yaml"
+#            }
+#            if (-not (Test-Path -Path $env:CONFIGURATION_YAML_PATH)) {
+#              Write-Host "Error: Configuration file not found at path: $env:CONFIGURATION_YAML_PATH. Exiting."
+#              exit 1
+#            }
+#            "CONFIGURATION_YAML_PATH=${{ env.CONFIGURATION_YAML_PATH }}" | Out-File -FilePath $env:GITHUB_ENV -Append
+#          }
+#        shell: pwsh
+#        env:
+#          USE_CONFIG_FILE: ${{ inputs.USE_CONFIG_FILE }}
+
+      # Environment Configuration for Publishing
+      - name: Configuration to Environment Variables
+        run: |
+          if ($env:USE_CONFIG_FILE -eq "true") {
+            if (-not $env:CONFIGURATION_YAML_PATH) {
+              Write-Host "CONFIGURATION_YAML_PATH is not provided, using default value."
+              $env:CONFIGURATION_YAML_PATH = "$($github.workspace)/src/ExtractAllAPIs.yaml"
+            }
+            if (-not (Test-Path -Path $env:CONFIGURATION_YAML_PATH)) {
+              Write-Host "Error: Configuration file not found at path: $env:CONFIGURATION_YAML_PATH. Exiting."
+              exit 1
+            }
+            "CONFIGURATION_YAML_PATH=${{ env.CONFIGURATION_YAML_PATH }}" | Out-File -FilePath $env:GITHUB_ENV -Append
+            Write-Host "--Using configuration file"
+          }
+          if ($env:DEPLOY_COMMIT_ONLY -eq "true") {
+            "COMMIT_ID=${{ github.sha }}" | Out-File -FilePath $env:GITHUB_ENV -Append
+            Write-Host "--Deploying changes from commit: ${{ github.sha }}"
+          }
+        shell: pwsh
+        env:
+          USE_CONFIG_FILE: ${{ inputs.USE_CONFIG_FILE }}
+          DEPLOY_COMMIT_ONLY: ${{ inputs.DEPLOY_COMMIT_ONLY }}
+      # Check if branch exists
+      # - name: Check if branch exists
+      #   if: startsWith(env.BRANCH_NAME, 'feature/')
+      #   run: |
+      #     branch_name=${{ env.BRANCH_NAME }}
+      #     if ! git ls-remote --heads origin "$branch_name"; then
+      #       echo "Branch $branch_name does not exist. Falling back to branch from environmentFrom input: ${{ inputs.environmentFrom }}."
+      #       echo "Notifying stakeholders about fallback to the environmentFrom branch."
+      #       exit 1
+      #       echo "BRANCH_NAME=${{ inputs.environmentFrom }}" >> $GITHUB_ENV
+      #     fi
+      #   shell: bash
+
+      # Ensure feature branch has a successful deployment tag for the current environment
+      # - name: Check for Successful Deployment Tag
+      #   if: startsWith(env.BRANCH_NAME, 'feature/') && !contains(inputs.environment, 'dev')
+      #   run: |
+      #     branch_name=${{ env.BRANCH_NAME }}
+      #     tag_name="${{ inputs.environmentFrom }}-successful"
+      #     if ! git ls-remote --tags origin | grep -q "$tag_name"; then
+      #       echo "Branch $branch_name does not have a successful deployment tag for environment $tag_name. Exiting.";
+      #       exit 1;
+      #     fi
+      #   shell: bash
+
+      # Replace tokens if using a config file
+      - name: Replace Environment Specific Tokens
+        if: ${{ inputs.USE_CONFIG_FILE }}
+        uses: Tractor-Supply-Integration/replace-tokens@v1
+        with:
+          tokenPrefix: "{#"
+          tokenSuffix: "#}"
+          files: ${{ env.CONFIGURATION_YAML_PATH }}
+        env:
+          API_MANAGEMENT_SERVICE_NAME: "${{ env.API_MANAGEMENT_SERVICE_NAME }}"
+
+      # Run the publisher with appropriate arguments
+      - name: Run publisher
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          $VerbosePreference = "Continue"
+          $InformationPreference = "Continue"
+          Write-Information "Downloading publisher..."
+          $publisherFileName = if ($env:RUNNER_OS -like "*Windows*") { "publisher.win-x64.exe" } else { "publisher.linux-x64.exe" }
+          $uri = "https://github.com/Azure/apiops/releases/download/${{ env.PUBLISHER_VERSION }}/$publisherFileName"
+          $destinationFilePath = Join-Path "${{ runner.temp }}" "publisher.exe"
+          Invoke-WebRequest -Uri "$uri" -OutFile "$destinationFilePath" -ErrorAction Stop
+          if (!(Test-Path -Path "$destinationFilePath")) {
+            Write-Host "Failed to download publisher. Exiting."
+            exit 1
+          }
+          if ($env:RUNNER_OS -like "*Linux*") {
+            Write-Information "Setting file permissions..."
+            & chmod +x "$destinationFilePath"
+            if ($LASTEXITCODE -ne 0) { throw "Setting file permissions failed." }
+          }
+          # Constructing Publisher Arguments
+          $publisherArgs = @()
+          if ($env:CONFIGURATION_YAML_PATH) {
+            $publisherArgs += "--config $env:CONFIGURATION_YAML_PATH"
+          }
+          if ($env:COMMIT_ID) {
+            $publisherArgs += "--commitId $env:COMMIT_ID"
+          }
+          Write-Information "Running publisher with arguments: $publisherArgs"
+          & "$destinationFilePath" $publisherArgs
+          if ($LASTEXITCODE -ne 0) { throw "Running publisher failed." }
+          Write-Information "Execution complete."
+        shell: pwsh
+      # Tag the branch with success or failure
+      - name: Successful Deployment
+        if: ${{ success() }} 
+        run: echo "Successful Deployment at this stage."
+        shell: bash
+
+
+#      # Tag the branch with success or failure
+#      - name: Tag Successful Deployment
+#        if: ${{ success() }} && startsWith(env.BRANCH_NAME, 'feature/') && !contains(inputs.environment, 'dev')
+#        run: |
+#          git config --global user.name "github-actions"
+#          git config --global user.email "github-actions@github.com"
+#          branch_name=${{ env.BRANCH_NAME }}
+#          tag_name="${{ inputs.environment }}-successful"
+#          git tag -a "$tag_name" -m "Successful deployment for $branch_name to ${{ inputs.environment }}"
+#          git push origin "$tag_name"
+#        shell: bash
+#
+#      - name: Tag Failed Deployment
+#        if: ${{ failure() }} && startsWith(env.BRANCH_NAME, 'feature/') && !contains(inputs.environment, 'dev')
+#        run: |
+#          git config --global user.name "github-actions"
+#          git config --global user.email "github-actions@github.com"
+#          branch_name=${{ env.BRANCH_NAME }}
+#          tag_name="${{ inputs.environment }}-failed"
+#          git tag -a "$tag_name" -m "Failed deployment for $branch_name to ${{ inputs.environment }}"
+#          git push origin "$tag_name"
+#        shell: bash
+#
+#      # Remove failed tag upon successful deployment
+#      - name: Remove Failed Tag Upon Success
+#        if: ${{ success() }} && startsWith(env.BRANCH_NAME, 'feature/') && !contains(inputs.environment, 'dev')
+#        run: |
+#          git config --global user.name "github-actions"
+#          git config --global user.email "github-actions@github.com"
+#          branch_name=${{ env.BRANCH_NAME }}
+#          failed_tag_name="${{ inputs.environment }}-failed"
+#          if git ls-remote --tags origin | grep -q "$failed_tag_name"; then
+#            git push origin --delete "$failed_tag_name"
+#          fi
+#        shell: bash#
